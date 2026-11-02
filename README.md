@@ -88,14 +88,17 @@ The project follows a staged quantitative modeling approach:
 
 ## Forecasting Results
 
-The forecasting backtest compares two models:
+The forecasting backtest uses the same 143 training months and 35 holdout months for all three models:
 
 | Model | MAE | RMSE | MAPE |
 |---|---:|---:|---:|
-| Baseline: Lagged VIX Only | 2.3357 | 3.2348 | 13.1513% |
-| Enhanced: GPR + Macro + Crisis Controls | 2.0976 | 3.3717 | 10.8721% |
+| Baseline: Lagged VIX Only | 2.2865 | 3.1974 | 12.9023% |
+| Controls: Lagged VIX + Macro + Crisis | 1.9963 | 3.1465 | 10.5982% |
+| Enhanced: GPR + Macro + Crisis Controls | 2.0728 | 3.3409 | 10.7466% |
 
-The enhanced model improves average forecast accuracy by MAE and MAPE, but performs worse by RMSE. This suggests that geopolitical and macroeconomic variables help during typical months but do not fully capture sudden volatility spikes.
+The controls-only model has the lowest MAE, RMSE, and MAPE on this holdout. Adding lagged country GPR increases all three errors. The macro controls use observed target-month values.
+
+The panel preserves October 2025 with missing CPI and year-over-year inflation. That target month is excluded for all models. November uses October VIX and country GPR. Building calendar lags before exclusions changes only the November predictions relative to the original holdout.
 
 ## Main Outputs
 
@@ -167,10 +170,10 @@ This project was completed in Python using:
 3. Install required packages:
 
 ```bash
-pip install pandas numpy matplotlib statsmodels openpyxl reportlab
+pip install 'pandas>=2.2' numpy matplotlib statsmodels openpyxl xlrd reportlab jupyter pytest
 ```
 
-4. Run the Jupyter Notebook:
+4. From the repository root, run all notebook cells against the committed raw snapshot. The optional source refresh defaults to off.
 
 ```text
 geopolitical_risk_analysis.ipynb
@@ -192,7 +195,7 @@ outputs/geopolitical_risk_quantitative_report.pdf
 
 The results suggest that geopolitical risk has a conditional rather than automatic relationship with U.S. market volatility. Broad global geopolitical risk is not a reliable standalone predictor of VIX. Country-specific U.S. geopolitical risk appears more relevant in simpler models, but its statistical significance disappears after accounting for lagged volatility and crisis-period shocks.
 
-The enhanced models show that volatility persistence, inflation, and crisis shocks explain more variation in monthly VIX than geopolitical risk alone. The forecasting results also show that adding geopolitical and macroeconomic variables can improve average forecast accuracy, but sudden volatility spikes remain difficult to predict.
+The enhanced models show that volatility persistence, inflation, and crisis shocks explain more variation in monthly VIX than geopolitical risk alone. The controls-only model has the lowest MAE, RMSE, and MAPE on this holdout. Adding lagged country GPR increases all three errors. The macro controls use observed target-month values.
 
 ## Limitations
 
@@ -229,3 +232,5 @@ This project demonstrates skills in:
 ## Disclaimer
 
 This project is for educational and portfolio purposes only. It is not investment advice, financial advice, or a trading model.
+
+Run the calendar-lag regression tests with `python -m pytest -q` from the repository root.
