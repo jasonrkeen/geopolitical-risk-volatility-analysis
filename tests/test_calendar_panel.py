@@ -41,3 +41,13 @@ def test_published_panel_and_shared_holdout() -> None:
         prediction = forecasts[f"{model}_predicted_vix"]
         assert prediction.notna().all()
         np.testing.assert_allclose(forecasts.vix - prediction, forecasts[f"{model}_error"])
+
+
+def test_lagged_country_regression_keeps_month_with_missing_prior_vix() -> None:
+    from calendar_panel import lagged_country_sample
+
+    panel = pd.read_csv(ROOT / "data_clean/merged_monthly_data.csv", index_col="date")
+    panel.loc["2025-11-30", "vix_lag1"] = np.nan
+    sample = lagged_country_sample(panel)
+    assert "2025-11-30" in sample.index
+    assert "2025-10-31" not in sample.index  # Missing inflation is a required control.

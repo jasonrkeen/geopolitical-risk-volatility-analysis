@@ -16,3 +16,9 @@ def prepare_monthly_panel(monthly: pd.DataFrame) -> pd.DataFrame:
     for column in LAG_COLUMNS:
         panel[f"{column}_lag1"] = panel[column].shift(1)
     return panel.reset_index()
+
+def lagged_country_sample(panel: pd.DataFrame) -> pd.DataFrame:
+    """Select shared model inputs; each oil specification handles its own benchmark."""
+    required = ["vix", "inflation_rate", "fed_funds_rate",
+                "gpr_usa_lag1", "gpr_china_lag1", "gpr_russia_lag1"]
+    return panel.dropna(subset=required).copy()
