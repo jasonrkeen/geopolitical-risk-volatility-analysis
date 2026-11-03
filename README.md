@@ -234,3 +234,5 @@ This project demonstrates skills in:
 This project is for educational and portfolio purposes only. It is not investment advice, financial advice, or a trading model.
 
 Run the calendar-lag regression tests with `python -m pytest -q` from the repository root.
+
+The [forecast-origin study](research/README.md) separately evaluates all three models with archived inputs available by each forecast date.
