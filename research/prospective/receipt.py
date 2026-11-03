@@ -73,12 +73,13 @@ def capture(vault: Path) -> None:
             if name == "GPR":
                 history = download(url)
                 (vault / "gpr_lookup.json").write_bytes(history)
+                record["lookup_sha256"] = sha256(history).hexdigest()
                 commit = json.loads(history)[0]
                 commit_time = pd.Timestamp(commit["commit"]["committer"]["date"])
                 if commit_time > min(pd.Timestamp(now()), pd.Timestamp(DAY + "T23:59:59Z")):
                     raise ValueError("GPR commit exceeds eligible time")
                 url = gpr_url(commit["sha"])
-                record.update(url=url, gpr_sha=commit["sha"], lookup_sha256=sha256(history).hexdigest(),
+                record.update(url=url, gpr_sha=commit["sha"],
                               gpr_committer_time_utc=commit_time.isoformat())
             raw = download(url)
             record["retrieved_at"] = now().isoformat()
@@ -90,12 +91,34 @@ def capture(vault: Path) -> None:
     (vault / "manifest.json").write_text(json.dumps(sources, indent=2), encoding="utf8")
 
 
+def retained_bytes(vault: Path, sources: dict) -> dict[str, bytes]:
+    """Check custody independently of forecast eligibility, even for exclusions."""
+    if set(sources) != {*SERIES, "GPR"}:
+        raise ValueError("Incomplete source manifest")
+    evidence = {}
+    for name, record in sources.items():
+        claims = [(name, "sha256")]
+        if name == "GPR":
+            claims.append(("gpr_lookup.json", "lookup_sha256"))
+        for filename, field in claims:
+            path = vault / filename
+            digest = record.get(field)
+            if digest is None and "error" in record and not path.exists():
+                continue
+            data = path.read_bytes()
+            if sha256(data).hexdigest() != digest:
+                raise ValueError(f"{filename} retained evidence hash mismatch")
+            evidence[filename] = data
+    return evidence
+
+
 def build(vault: Path, issued: datetime) -> dict:
     window(issued)
     sources = json.loads((vault / "manifest.json").read_text(encoding="utf8"))
     receipt = dict(target=TARGET, cutoff=CLOSE.isoformat(), issued_at=issued.isoformat(),
                    protocol_sha=FREEZE, amendment_sha=AMENDMENT, sources=sources,
                    feature_periods=dict(vix="2026-11", brent="2026-10", fed="2026-10", gpr="2026-10"))
+    evidence = retained_bytes(vault, sources)
     fred = {}
     try:
         for name in (*SERIES, "GPR"):
@@ -106,24 +129,28 @@ def build(vault: Path, issued: datetime) -> dict:
                 raise ValueError(f"Invalid provenance for {name}")
             if "error" in r:
                 raise ValueError(f"{name} acquisition failed: {r['error']}")
-            raw = (vault / name).read_bytes()
-            if sha256(raw).hexdigest() != r["sha256"]:
-                raise ValueError(f"{name} source hash mismatch")
+            raw = evidence[name]
             if name == "GPR":
-                lookup = (vault / "gpr_lookup.json").read_bytes()
+                lookup = evidence["gpr_lookup.json"]
                 meta = json.loads(lookup)[0]
                 commit_time = pd.Timestamp(meta["commit"]["committer"]["date"])
                 if (r["url"] != gpr_url(meta["sha"]) or r["gpr_sha"] != meta["sha"]
-                        or sha256(lookup).hexdigest() != r["lookup_sha256"]
                         or commit_time != pd.Timestamp(r["gpr_committer_time_utc"])
                         or commit_time > min(pd.Timestamp(stamp), pd.Timestamp(DAY + "T23:59:59Z"))):
                     raise ValueError("Invalid GPR provenance")
                 gpr = pd.read_excel(BytesIO(raw), usecols=["month", *COUNTRIES]).set_index("month")
-                gpr.index = pd.to_datetime(gpr.index).to_period("M")
+                months = pd.to_datetime(gpr.index, errors="coerce")
+                if months.hasnans:
+                    raise ValueError("Malformed observation date in GPR")
+                gpr.index = months.to_period("M")
                 if not gpr.index.is_unique:
                     raise ValueError("Duplicate GPR months")
             else:
-                df = pd.read_csv(BytesIO(raw), index_col=0, parse_dates=True)
+                df = pd.read_csv(BytesIO(raw), index_col=0)
+                dates = pd.to_datetime(df.index, format="%Y-%m-%d", errors="coerce")
+                if dates.hasnans:
+                    raise ValueError(f"Malformed observation date in {name}")
+                df.index = dates
                 if (r["url"] != f"https://alfred.stlouisfed.org/graph/alfredgraph.csv?id={name}&vintage_date={DAY}"
                         or list(df.columns) != [f"{name}_20261130"] or not df.index.is_unique):
                     raise ValueError(f"Invalid {name} vintage or duplicate dates")
@@ -165,6 +192,51 @@ def governing() -> dict | None:
     return min(candidates, key=lambda s: (s["created_at"], s["id"]), default=None)
 
 
+def receipt_content(receipt: dict) -> bytes:
+    return json.dumps(receipt, indent=2, allow_nan=False).encode() + b"\n"
+
+
+def recover(vault: Path) -> dict:
+    """Reconcile the first registered entry using GETs only, at any time."""
+    first = governing()
+    audit = {"first": first, "checked_at": now().isoformat(), "disposition": "NO_ENTRY"}
+    if first is not None:
+        try:
+            url = first.get("target_url") or ""
+            match = re.fullmatch(re.escape(f"https://github.com/{REPO}/commit/") + r"([0-9a-f]{40})", url)
+            if not match:
+                raise ValueError("Invalid immutable target URL")
+            server = datetime.fromisoformat(first["created_at"].replace("Z", "+00:00"))
+            window(server)
+            stored = api(f"repos/{REPO}/contents/{RECEIPT}?ref={match[1]}")
+            remote = base64.b64decode("".join(stored["content"].split()), validate=True)
+            receipt = json.loads((vault / "receipt.json").read_text(encoding="utf8"))
+            if remote != receipt_content(receipt):
+                raise ValueError("Governing receipt differs from the prepared candidate")
+            issued = datetime.fromisoformat(receipt["issued_at"])
+            if issued > server or receipt != build(vault, issued):
+                raise ValueError("Governing receipt failed issuance or provenance validation")
+            audit["disposition"] = "FORECAST_EXCLUDED" if "exclusion" in receipt else "VERIFIED_FORECAST"
+            if "exclusion" in receipt:
+                audit["reason"] = receipt["exclusion"]
+        except (ValueError, KeyError, TypeError, OSError) as exc:
+            audit.update(disposition="FORECAST_EXCLUDED", reason=str(exc))
+        except subprocess.CalledProcessError:
+            audit.update(disposition="UNVERIFIED", reason="GitHub read failed; retry recovery")
+    elif now() > CLOSE:
+        audit["disposition"] = "MISSED_RECEIPT"
+    # Keep the original publish response if present. Replace atomically after reconciliation.
+    path = vault / "registration.json"
+    if path.exists():
+        prior = json.loads(path.read_text(encoding="utf8"))
+        if "response" in prior:
+            audit["response"] = prior["response"]
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(audit, indent=2), encoding="utf8")
+    tmp.replace(path)
+    return audit
+
+
 def publish(vault: Path, receipt: dict) -> int:
     window(now())
     if api("user")["login"] != OWNER:
@@ -175,7 +247,7 @@ def publish(vault: Path, receipt: dict) -> int:
     if receipt != build(vault, datetime.fromisoformat(receipt["issued_at"])):
         raise ValueError("Receipt does not match retained evidence")
     # The dedicated branch is create-only. Never replace or delete a receipt.
-    content = json.dumps(receipt, indent=2, allow_nan=False).encode() + b"\n"
+    content = receipt_content(receipt)
     encoded = base64.b64encode(content).decode()
     root = f"repos/{REPO}"
     anchor_tree = api(f"{root}/git/commits/{AMENDMENT}")["tree"]["sha"]
@@ -218,12 +290,16 @@ def publish(vault: Path, receipt: dict) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["prepare", "register"])
+    parser.add_argument("action", choices=["prepare", "register", "recover"])
     parser.add_argument("--vault", type=Path, required=True, help="External private evidence directory")
     args = parser.parse_args()
     vault = args.vault.resolve()
     if vault.is_relative_to(ROOT):
         parser.error("Keep retained evidence outside the repository")
+    if args.action == "recover":
+        audit = recover(vault)
+        print("Read-only reconciliation:", audit["disposition"], audit.get("reason", ""))
+        return
     window(now())
     path = vault / "receipt.json"
     if args.action == "prepare":

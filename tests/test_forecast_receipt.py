@@ -68,7 +68,7 @@ def test_prepare_three_models(synthetic):
         assert record["sha256"] == workflow.sha256((vault / name).read_bytes()).hexdigest()
 
 
-@pytest.mark.parametrize("problem", ["missing session", "missing rate", "tampered", "unavailable"])
+@pytest.mark.parametrize("problem", ["missing session", "missing rate", "unavailable"])
 def test_exclusion_shared(synthetic, problem, monkeypatch):
     vault, stamp, inputs = synthetic
     if problem == "missing session":
@@ -80,8 +80,6 @@ def test_exclusion_shared(synthetic, problem, monkeypatch):
             raise requests.ConnectionError("synthetic outage")
         monkeypatch.setattr(workflow, "download", unavailable)
     workflow.capture(vault)
-    if problem == "tampered":
-        (vault / "VIXCLS").write_bytes(b"changed")
     r = workflow.build(vault, stamp)
     assert r["exclusion"] and "predictions" not in r
 
@@ -111,12 +109,14 @@ def test_first_owner_status_across_pages(monkeypatch):
 
 
 @pytest.mark.parametrize("exclude", [False, True])
-def test_mock_registration_and_repeat(synthetic, monkeypatch, exclude):
+@pytest.mark.parametrize("lose_response", [False, True])
+def test_mock_registration_and_repeat(synthetic, monkeypatch, exclude, lose_response):
     vault, stamp, inputs = synthetic
     if exclude:
         inputs["VIXCLS"].pop()
     workflow.capture(vault)
     r = workflow.build(vault, stamp)
+    (vault / "receipt.json").write_text(json.dumps(r))
     sha = "b" * 40
     statuses = []
     contents = {}
@@ -148,9 +148,26 @@ def test_mock_registration_and_repeat(synthetic, monkeypatch, exclude):
         assert payload["context"] == workflow.CONTEXT and payload["target_url"].endswith(sha)
         status = dict(payload, id=7, created_at=stamp.isoformat(), creator={"login": workflow.OWNER})
         statuses.append(status)
+        if lose_response:
+            raise ConnectionError("Simulated lost response after acceptance")
         return status
 
     monkeypatch.setattr(workflow, "api", api)
+    if lose_response:
+        with pytest.raises(ConnectionError):
+            workflow.publish(vault, r)
+        assert not (vault / "registration.json").exists()
+        monkeypatch.setattr(workflow, "now", lambda: workflow.CLOSE + timedelta(days=1))
+        def read_only(path, payload=None, paginate=False):
+            assert payload is None and (paginate or "/contents/" in path)
+            return api(path, paginate=paginate)
+        monkeypatch.setattr(workflow, "api", read_only)
+        audit = workflow.recover(vault)
+        assert audit == json.loads((vault / "registration.json").read_text())
+        assert audit["first"] == statuses[0]
+        assert audit["disposition"] == ("FORECAST_EXCLUDED" if exclude else "VERIFIED_FORECAST")
+        assert len(statuses) == 1
+        return
     assert workflow.publish(vault, r) == 7
     assert json.loads(contents["value"]) == r
     assert ("exclusion" in r) == exclude
@@ -168,3 +185,104 @@ def test_non_owner_cannot_write(synthetic, monkeypatch):
     monkeypatch.setattr(workflow, "api", api)
     with pytest.raises(ValueError, match="owner"):
         workflow.publish(vault, r)
+
+@pytest.mark.parametrize("filename", ["GPR", "CPIAUCSL", "gpr_lookup.json"])
+@pytest.mark.parametrize("damage", ["delete", "alter"])
+def test_earlier_exclusion_cannot_hide_damaged_evidence(synthetic, monkeypatch, filename, damage):
+    vault, stamp, _ = synthetic
+    fetch = workflow.download
+    def outage(url):
+        if "id=VIXCLS" in url:
+            raise requests.ConnectionError("synthetic VIX outage")
+        return fetch(url)
+    monkeypatch.setattr(workflow, "download", outage)
+    workflow.capture(vault)
+    receipt = workflow.build(vault, stamp)
+    assert "VIXCLS acquisition failed" in receipt["exclusion"]
+    path = vault / filename
+    if damage == "delete":
+        path.unlink()
+    else:
+        path.write_bytes(b"altered")
+    def read_only(endpoint, paginate=False):
+        if endpoint == "user":
+            return {"login": workflow.OWNER}
+        assert paginate and "/statuses" in endpoint
+        return [[]]
+    monkeypatch.setattr(workflow, "api", read_only)
+    with pytest.raises((FileNotFoundError, ValueError)):
+        workflow.publish(vault, receipt)
+
+
+@pytest.mark.parametrize("series", workflow.SERIES)
+def test_malformed_source_date_is_one_shared_exclusion(synthetic, series):
+    vault, stamp, inputs = synthetic
+    inputs[series].append(("not-a-date", 2))
+    workflow.capture(vault)
+    receipt = workflow.build(vault, stamp)
+    assert receipt["exclusion"] == f"Malformed observation date in {series}"
+    assert "predictions" not in receipt
+    assert receipt["sources"][series]["sha256"] == workflow.sha256((vault / series).read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("fault", ["late", "different bytes", "wrong URL", "absent"])
+def test_recovery_never_substitutes_another_receipt(synthetic, monkeypatch, fault):
+    vault, stamp, _ = synthetic
+    workflow.capture(vault)
+    receipt = workflow.build(vault, stamp)
+    (vault / "receipt.json").write_text(json.dumps(receipt))
+    first = dict(context=workflow.CONTEXT, creator={"login": workflow.OWNER}, id=2,
+                 created_at=(workflow.CLOSE + timedelta(seconds=1) if fault == "late" else stamp).isoformat(),
+                 target_url=f"https://github.com/{workflow.REPO}/commit/" + "b"*40)
+    if fault == "wrong URL":
+        first["target_url"] = "https://example.org/wrong"
+    def read_only(endpoint, paginate=False):
+        if paginate:
+            return [[]] if fault == "absent" else [[dict(first, id=3)], [first]]
+        assert fault == "different bytes" and endpoint.endswith("b"*40)
+        return {"content": b64encode(b"another receipt").decode()}
+    monkeypatch.setattr(workflow, "api", read_only)
+    monkeypatch.setattr(workflow, "now", lambda: workflow.CLOSE + timedelta(days=1))
+    monkeypatch.setattr("sys.argv", ["receipt", "recover", "--vault", str(vault)])
+    workflow.main()
+    audit = json.loads((vault / "registration.json").read_text())
+    if fault == "absent":
+        assert audit["disposition"] == "MISSED_RECEIPT" and audit["first"] is None
+    else:
+        assert audit["disposition"] == "FORECAST_EXCLUDED" and audit["first"] == first
+
+
+def test_lookup_is_verified_when_gpr_workbook_download_fails(synthetic, monkeypatch):
+    vault, stamp, _ = synthetic
+    fetch = workflow.download
+    def unavailable(url):
+        if url.startswith("https://raw.githubusercontent.com/"):
+            raise requests.ConnectionError("synthetic GPR outage")
+        return fetch(url)
+    monkeypatch.setattr(workflow, "download", unavailable)
+    workflow.capture(vault)
+    receipt = workflow.build(vault, stamp)
+    assert "GPR acquisition failed" in receipt["exclusion"]
+    (vault / "gpr_lookup.json").write_bytes(b"changed")
+    with pytest.raises(ValueError, match="lookup.*hash mismatch"):
+        workflow.build(vault, stamp)
+
+
+def test_malformed_gpr_date_is_a_shared_exclusion(synthetic, monkeypatch):
+    vault, stamp, _ = synthetic
+    fetch = workflow.download
+    def malformed(url):
+        if not url.startswith("https://raw.githubusercontent.com/"):
+            return fetch(url)
+        stream = BytesIO()
+        book = xlwt.Workbook()
+        sheet = book.add_sheet("GPR")
+        for i, (key, value) in enumerate(zip(["month", *workflow.COUNTRIES], ["bad-date", 2, 3, 4])):
+            sheet.write(0, i, key)
+            sheet.write(1, i, value)
+        book.save(stream)
+        return stream.getvalue()
+    monkeypatch.setattr(workflow, "download", malformed)
+    workflow.capture(vault)
+    receipt = workflow.build(vault, stamp)
+    assert receipt["exclusion"] == "Malformed observation date in GPR" and "predictions" not in receipt
