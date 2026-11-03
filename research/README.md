@@ -48,3 +48,5 @@ All 36 scheduled targets are listed. October 2025 is eligible. The issue-date AL
 On the 33 dates shared with the earlier conditional backtest, baseline MAE is 2.25891925 in the earlier backtest and 2.25893528 in the forecast-date study. Both round to 2.2589 at four decimal places. Controls-only MAE rises from 1.9612 to 2.5624, and enhanced MAE rises from 2.0169 to 3.1785. Both input timing and vintage differ, so those changes cannot be assigned to any one series. The overall loss ranking on these inspected dates does not establish performance on future months.
 
 The [prospective evaluation protocol](prospective/README.md) freezes the models and scoring rules for the December 2026 through November 2027 targets.
+
+The [November 30 receipt runbook](prospective/november-receipt.md) covers the offline rehearsal and the cutoff-day owner commands.
