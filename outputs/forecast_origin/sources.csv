@@ -1,4 +1,4 @@
-cutoff,series,url,sha256,published
+cutoff,series,url,sha256,gpr_committer_time_utc
 2022-12-30,VIXCLS,https://alfred.stlouisfed.org/graph/alfredgraph.csv?id=VIXCLS&vintage_date=2022-12-30,d2e4715c12c821f245238830580a0065691a5df2c2906731648e0b2279a94491,
 2022-12-30,DCOILBRENTEU,https://alfred.stlouisfed.org/graph/alfredgraph.csv?id=DCOILBRENTEU&vintage_date=2022-12-30,4940762cb8b1fe16cc180af02a63744c252ae9851360905dcf9e18e95a0f3380,
 2022-12-30,FEDFUNDS,https://alfred.stlouisfed.org/graph/alfredgraph.csv?id=FEDFUNDS&vintage_date=2022-12-30,31d694d25f25bfd0c92996d27216c736dde5c208e3bb663a4fb902b118340123,

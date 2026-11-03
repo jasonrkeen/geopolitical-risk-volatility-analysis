@@ -69,22 +69,22 @@ def snapshot(cutoff: pd.Timestamp, cache: Path, pins: dict) -> Snapshot:
     if (day, "GPR") in pins:
         record = pins[day, "GPR"]
         sha = record["url"].split("/")[5]
-        published = record["published"]
+        gpr_committer_time_utc = record["gpr_committer_time_utc"]
     elif meta.exists():
-        sha, published = json.loads(meta.read_text())
+        sha, gpr_committer_time_utc = json.loads(meta.read_text())
     else:
         # Use a conservative UTC day boundary before the US evening cutoff.
         endpoint = f"repos/{GPR_REPO}/commits?path={GPR_PATH}&until={day}T23:59:59Z&per_page=1"
         commit = json.loads(subprocess.check_output(["gh", "api", endpoint]))[0]
-        sha, published = commit["sha"], commit["commit"]["committer"]["date"]
-        meta.write_text(json.dumps([sha, published]))
-    if published[:10] > day:
+        sha, gpr_committer_time_utc = commit["sha"], commit["commit"]["committer"]["date"]
+        meta.write_text(json.dumps([sha, gpr_committer_time_utc]))
+    if gpr_committer_time_utc[:10] > day:
         raise ValueError(f"GPR commit after cutoff {day}")
     url = f"https://raw.githubusercontent.com/{GPR_REPO}/{sha}/{GPR_PATH}"
     raw = fetch(url, folder / "gpr.xls")
     gpr = pd.read_excel(BytesIO(raw), usecols=["month", *COUNTRIES]).set_index("month")
     gpr.index = pd.to_datetime(gpr.index).to_period("M")
-    manifest.append(dict(cutoff=day, series="GPR", url=url, published=published,
+    manifest.append(dict(cutoff=day, series="GPR", url=url, gpr_committer_time_utc=gpr_committer_time_utc,
                          sha256=hashlib.sha256(raw).hexdigest()))
     for row in manifest:
         if pins and row["sha256"] != pins[day, row["series"]]["sha256"]:
@@ -118,8 +118,12 @@ def features(target: pd.Period, data: Snapshot) -> dict:
 def run(cache: Path) -> None:
     panel = pd.read_csv(ROOT / "data_clean/merged_monthly_data.csv", index_col="date", parse_dates=True)
     panel.index = panel.index.to_period("M")
-    daily = pd.read_csv(ROOT / "data_raw/vix.csv", parse_dates=["observation_date"]).dropna()
-    closes = daily.groupby(daily.observation_date.dt.to_period("M")).observation_date.max()
+    sessions = pd.DatetimeIndex(pd.read_csv(
+        ROOT / "research/vix_sessions.csv", parse_dates=["session_date"]
+    )["session_date"])
+    if not sessions.is_unique or not sessions.is_monotonic_increasing:
+        raise ValueError("Pinned VIX sessions must be unique and sorted")
+    closes = sessions.to_series().groupby(sessions.to_period("M")).max()
     targets = pd.period_range(FIRST_TARGET, LAST_TARGET, freq="M")
     cutoffs = [closes[t - 1] for t in targets]
     manifest_path = OUTPUT / "sources.csv"
@@ -133,9 +137,7 @@ def run(cache: Path) -> None:
     missing_dates = []
     for target, archive in zip(targets, snapshots):
         origin = target - 1
-        expected = pd.DatetimeIndex(daily.loc[
-            daily.observation_date.dt.to_period("M") == origin, "observation_date"
-        ])
+        expected = sessions[sessions.to_period("M") == origin]
         available = archive.fred["VIXCLS"].index
         vintage_dates = available[available.to_period("M") == origin]
         differences = expected.symmetric_difference(vintage_dates)
@@ -151,7 +153,7 @@ def run(cache: Path) -> None:
     out.loc[out.vix_calendar_difference.ne(""), "vix"] = np.nan
     out["cutoff"] = cutoffs
     out["actual"] = panel.vix.reindex(targets)
-    out["exclusion"] = out[["actual", *MODELS["enhanced"]]].apply(
+    out["exclusion"] = out[MODELS["enhanced"]].apply(
         lambda row: ", ".join(row.index[row.isna()]), axis=1)
     valid = out.exclusion.eq("")
     scores = []
@@ -161,7 +163,7 @@ def run(cache: Path) -> None:
         error = out.actual - pred
         out[model + "_prediction"] = pred
         out[model + "_error"] = error
-        scores.append(dict(model=model, train_n=len(train), holdout_n=int(valid.sum()),
+        scores.append(dict(model=model, train_n=len(train), holdout_n=int(error.notna().sum()),
                            mae=error.abs().mean(), rmse=np.sqrt(error.pow(2).mean()),
                            mape=100 * (error / out.actual).abs().mean()))
     out["gpr_minus_controls_abs_error"] = out.enhanced_error.abs() - out.controls_error.abs()

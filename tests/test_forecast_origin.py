@@ -41,3 +41,45 @@ def test_published_forecasts_and_metrics() -> None:
         np.testing.assert_allclose(scores.loc[name, ["mae", "rmse", "mape"]].astype(float),
                                    [error.abs().mean(), np.sqrt(error.pow(2).mean()),
                                     (100 * error.abs() / out.loc[valid, "actual"]).mean()])
+
+
+def test_outcome_revisions_cannot_change_cutoffs_or_forecasts(tmp_path, monkeypatch) -> None:
+    from research import forecast_origin as study
+
+    (tmp_path / "research").mkdir()
+    (tmp_path / "data_clean").mkdir()
+    (tmp_path / "data_raw").mkdir()
+    monkeypatch.setattr(study, "ROOT", tmp_path)
+    monkeypatch.setattr(study, "OUTPUT", tmp_path / "outputs")
+    monkeypatch.setattr(study, "LAST_TARGET", pd.Period("2023-02", "M"))
+    sessions = ["2022-12-29", "2022-12-30", "2023-01-30", "2023-01-31"]
+    pd.DataFrame({"session_date": sessions}).to_csv(tmp_path / "research/vix_sessions.csv", index=False)
+    months = pd.date_range("2009-01-01", "2023-01-01", freq="MS")
+    series = pd.Series(np.arange(len(months), dtype=float) + 100, index=months)
+    vix = pd.concat([series.loc[:"2022-11-01"], pd.Series(
+        [19., 20., 21.], index=pd.to_datetime(sessions[:3]))])
+    gpr = pd.DataFrame({key: series.values for key in study.COUNTRIES.values()},
+                       index=months.to_period("M"))
+
+    def archive(cutoff, cache, pins):
+        fred = {"VIXCLS": vix, "FEDFUNDS": series, "DCOILBRENTEU": series, "CPIAUCSL": series}
+        return Snapshot({key: values.loc[:cutoff] for key, values in fred.items()}, gpr,
+                        [dict(cutoff=str(cutoff.date()), series="fixture", sha256="fixture")])
+
+    monkeypatch.setattr(study, "snapshot", archive)
+    outcome = tmp_path / "data_clean/merged_monthly_data.csv"
+    outcome.write_text("date,vix\n2023-01-31,22\n2023-02-28,23\n")
+    study.run(tmp_path)
+    first = pd.read_csv(study.OUTPUT / "monthly.csv")
+    # A revised outcome disappears and the later daily file omits both final sessions.
+    outcome.write_text("date,vix\n2023-02-28,24\n")
+    (tmp_path / "data_raw/vix.csv").write_text(
+        "observation_date,VIXCLS\n2022-12-29,19\n2023-01-30,21\n")
+    study.run(tmp_path)
+    revised = pd.read_csv(study.OUTPUT / "monthly.csv")
+    columns = ["cutoff", "exclusion", "vix_calendar_difference",
+               *(name + "_prediction" for name in study.MODELS)]
+    pd.testing.assert_frame_equal(first[columns], revised[columns])
+    assert revised.cutoff.tolist() == [sessions[1], sessions[3]]
+    assert pd.isna(revised.loc[0, "actual"]) and pd.notna(revised.loc[0, "baseline_prediction"])
+    assert revised.loc[1, "vix_calendar_difference"] == sessions[3]
