@@ -621,7 +621,7 @@ story.append(Paragraph("7. Forecasting and Backtesting", heading_style))
 
 story.append(
     Paragraph(
-        "To extend the study from explanation to prediction, a forecasting backtest was conducted for the 2023-2025 period. The forecasting exercise compares a simple baseline model using only one-month lagged VIX with an enhanced model that includes lagged VIX, geopolitical risk variables, oil prices, inflation, interest rates, and crisis-period controls.",
+        "The 2023-2025 backtest compares prior VIX alone, prior VIX with macro and crisis controls, and the same controls plus lagged country GPR.",
         body_style,
     )
 )
@@ -647,7 +647,7 @@ else:
 add_chart(
     story,
     "actual_vs_predicted_vix_forecast.png",
-    "Figure 10. Actual versus predicted VIX forecasts for 2023-2025. The chart compares the baseline lagged-VIX forecast with the enhanced model forecast. Both models follow the general level of VIX, but both struggle with sudden spikes. This illustrates a key challenge in volatility forecasting: extreme events are difficult to predict using monthly explanatory variables.",
+    "Figure 10. Actual versus predicted VIX forecasts for 2023-2025. The chart compares all three model estimates with observed monthly VIX. This illustrates a key challenge in volatility forecasting: extreme events are difficult to predict using monthly explanatory variables.",
 )
 
 add_chart(
@@ -658,7 +658,7 @@ add_chart(
 
 story.append(
     Paragraph(
-        "The enhanced model improves average predictive accuracy relative to the baseline model, as shown by lower MAE and MAPE. However, the enhanced model has a slightly higher RMSE, suggesting that it may perform worse during large volatility spikes. This indicates that geopolitical and macroeconomic variables can improve typical monthly forecasts but still do not fully capture sudden volatility shocks.",
+        "The controls-only model has the lowest MAE, RMSE, and MAPE on this holdout. Adding lagged country GPR increases all three errors. The macro controls use observed target-month values.",
         body_style,
     )
 )
@@ -700,7 +700,7 @@ story.append(
 
 story.append(
     Paragraph(
-        "The forecasting backtest adds a predictive perspective to the analysis. The enhanced model performs better than the baseline model by MAE and MAPE, suggesting that macroeconomic and geopolitical variables improve average forecast accuracy. However, the higher RMSE shows that large volatility spikes remain difficult to forecast.",
+        "All three specifications used the same 35 holdout months. October 2025 CPI and inflation are missing. November uses October VIX and country GPR.",
         body_style,
     )
 )
@@ -772,7 +772,7 @@ story.append(
 )
 story.append(
     Paragraph(
-        "The forecasting backtest shows that the enhanced model modestly improves average forecast accuracy, but sudden volatility spikes remain difficult to predict. This reinforces the broader conclusion that geopolitical risk and macroeconomic conditions can improve risk modeling, but volatility forecasting remains highly sensitive to unexpected shocks.",
+        "The controls-only model has the lowest MAE, RMSE, and MAPE on this holdout. Adding lagged country GPR increases all three errors. The macro controls use observed target-month values.",
         body_style,
     )
 )
