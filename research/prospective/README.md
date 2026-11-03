@@ -35,3 +35,5 @@ For scoring, use the **ALFRED VIXCLS vintage dated 10 calendar days after the la
 On the common set of issued months with verified outcomes, calculate equal-weight monthly **mean absolute error (MAE) in VIX points** for each model. The primary contrast is enhanced MAE minus controls MAE, equivalently the mean of the paired monthly absolute-error differences. A negative unrounded contrast favors adding GPR; zero is a tie. Publish all three MAEs, the signed contrast, the monthly loss pairs and the eligible count out of 12. Baseline comparisons, RMSE and MAPE are secondary and cannot override the primary contrast.
 
 Require at least 9 common scored months for the directional conclusion. With 1–8 months, report descriptive scores and insufficient coverage; with zero months, report no score. This short panel supports a descriptive comparison and carries no significance or operational forecasting claim.
+
+[Amendment A1, filed November 3, 2026](amendment-a1.md), governs receipt selection, outcome retry deadlines and the final status lock for all 12 targets.
