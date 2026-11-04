@@ -1,0 +1,15 @@
+# November 30 receipt workflow
+
+This manual workflow prepares the December 2026 target under [Amendment A1](amendment-a1.md). Run it from a full clone with the frozen commits available, the research requirements installed, and GitHub CLI authenticated as **jasonrkeen** for registration. The owner account needs repository contents and commit-status write access. Preparation and registration use the real clock. Recovery can run at any time. The operational window opens conservatively at **16:30 Eastern on November 30, 2026** and closes at **23:59:59 Eastern**.
+
+## Rehearse offline
+
+Run `python -m pytest -q tests/test_forecast_receipt.py`. The tests construct synthetic daily and monthly CSV files and a legacy GPR workbook. GitHub and the source downloads are replaced in the tests. There is no timer, scheduled dispatch, or clock override on the operator command.
+
+## Cutoff-day procedure
+
+1. Choose a new, private evidence directory outside the checkout that can be retained through scoring and audit. Run `python -m research.prospective.receipt prepare --vault ../private-vix-2026-11-30`. The command retrieves the four issue-date ALFRED inputs and the eligible GPR revision, retains their bytes, and records retrieval timestamps, hashes, source periods and commit metadata. It reads coefficients and sessions from the original frozen Git objects. Inspect the local `receipt.json` for either three finite predictions or a shared exclusion. Finish this step well before the deadline.
+2. To lodge that exact candidate, run `python -m research.prospective.receipt register --vault ../private-vix-2026-11-30`. This is the live publication command. It rebuilds the receipt from retained evidence, writes only the receipt JSON into an immutable Git commit, and keeps it reachable on the create-only `receipts/2026-12` branch. It then registers the A1 context on the original freeze SHA, retrieves all status pages, and checks the governing ID, URL and server timestamp. Keep the printed ID and private `registration.json`.
+3. After an interrupted registration, run `python -m research.prospective.receipt recover --vault ../private-vix-2026-11-30` using the original vault. Recovery uses GitHub GET requests only, including after cutoff. It records the first owner entry (ID, server timestamp, original URL), verifies the exact commit's receipt bytes against the prepared candidate, rebuilds from retained evidence, and writes its disposition to the local `registration.json`. A late, malformed or mismatched first entry remains governing. A failed GitHub read can be retried through recovery. If no status exists, register the same candidate only while the window is open. After cutoff, an absent entry is a missed receipt.
+
+Registration checks every claimed retained source and GPR lookup hash, including for a shared exclusion. Missing or altered evidence prevents registration. An intact file with an invalid observation date produces a shared exclusion with its source hash. Keep the reachable commit and original vault through the audit.
